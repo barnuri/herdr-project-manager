@@ -12,8 +12,12 @@ jump into any of them as a new herdr **tab** or **workspace** from a fuzzy-filte
 - **Glob auto-discovery** — patterns like `~/sandbox/*/.git` find every repo automatically
   (a match on a `.git` directory registers its parent as the project).
 - **Manual projects** — pin any directory with a custom name.
-- **Fuzzy picker** in a herdr popup pane: type to filter, `Enter` opens the project as a new
-  tab, `Ctrl+W` opens it as a new workspace, `Esc` closes.
+- **Sidebar picker** (split pane, VSCode-style names-only list): type to filter fuzzily,
+  `↑`/`↓` to move, `Enter` opens with the selected mode button — `[ workspace ]` (default) or
+  `[ tab ]`, switched with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes.
+- **Toggle** — running the `Open project picker` action again minimizes (closes) the sidebar.
+- **Instant load** — the last discovery result is cached in the plugin state dir, so the list
+  paints immediately and globs refresh in the background.
 - **Add current directory** action — one keypress to track the project you're standing in.
 - Zero npm dependencies; plain Node.js (>= 22).
 
@@ -34,7 +38,7 @@ herdr plugin link ./herdr-project-manager
 
 | What | How |
 |---|---|
-| Open the picker | Run the `Open project picker` action, or `herdr plugin pane open --plugin barnuri.project-manager --entrypoint picker` |
+| Open / minimize the sidebar | Run the `Open project picker` action (toggles), or `herdr plugin pane open --plugin barnuri.project-manager --entrypoint picker` |
 | Add current directory | Run the `Add current directory as project` action |
 | Edit the project list | Run the `Edit project list` action (opens the config in `$EDITOR` in a new tab) |
 
@@ -54,7 +58,13 @@ combination like `prefix+shift+p`; check yours with `prefix+?`.)
 ## Configuration
 
 The config lives in the plugin's config directory (`herdr plugin config-dir barnuri.project-manager`),
-in `projects.json`:
+in `projects.json`. Create it in one line:
+
+```bash
+echo '{ "globs": ["~/sandbox/*/.git"], "projects": [] }' > "$(herdr plugin config-dir barnuri.project-manager)/projects.json"
+```
+
+Full shape:
 
 ```json
 {

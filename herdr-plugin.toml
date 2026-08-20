@@ -9,9 +9,7 @@ platforms = ["linux", "macos"]
 id = "picker"
 title = "Projects"
 command = ["node", "bin/picker.js"]
-placement = "popup"
-width = 90
-height = 30
+placement = "split"
 
 [[actions]]
 id = "open-picker"
