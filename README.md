@@ -14,8 +14,10 @@ jump into any of them as a new herdr **tab** or **workspace** from a fuzzy-filte
 - **Manual projects** — pin any directory with a custom name.
 - **Sidebar picker** (split pane, VSCode-style names-only list): type to filter fuzzily,
   `↑`/`↓` to move, `Enter` opens with the selected mode button — `[ workspace ]` (default) or
-  `[ tab ]`, switched with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes.
+  `[ tab ]`, switched with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes, `<` collapses.
 - **Toggle** — running the `Open project picker` action again minimizes (closes) the sidebar.
+- **Collapse/expand in place** — press `<` to collapse the sidebar to a slim strip (like herdr's
+  own sidebar); any key expands it back.
 - **Instant load** — the last discovery result is cached in the plugin state dir, so the list
   paints immediately and globs refresh in the background.
 - **Add current directory** action — one keypress to track the project you're standing in.

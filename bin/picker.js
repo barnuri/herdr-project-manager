@@ -5,7 +5,7 @@ const { loadProjectCache, saveProjectCache } = require('../lib/cache');
 const { loadConfig } = require('../lib/config');
 const { discoverProjects, mergeProjects } = require('../lib/discover');
 const { fuzzyFilter } = require('../lib/fuzzy');
-const { openTab, openWorkspace } = require('../lib/herdr');
+const { openTab, openWorkspace, runHerdrText } = require('../lib/herdr');
 
 class Picker {
     static ANSI = {
@@ -28,6 +28,7 @@ class Picker {
         backspace: '\x7f',
         tab: '\t',
         ctrlT: '\x14',
+        collapse: '<',
         up: '\x1b[A',
         down: '\x1b[B',
         left: '\x1b[D',
@@ -44,6 +45,14 @@ class Picker {
 
     static MODES = ['workspace', 'tab'];
 
+    static COLLAPSED_TARGET_COLS = 8;
+
+    static RESIZE_STEP = 0.05;
+
+    static RESIZE_SETTLE_MS = 120;
+
+    static MAX_RESIZE_STEPS = 14;
+
     constructor(projects, io = { stdin: process.stdin, stdout: process.stdout }) {
         this.projects = projects;
         this.stdin = io.stdin;
@@ -51,7 +60,12 @@ class Picker {
         this.query = '';
         this.selectedIndex = 0;
         this.mode = 'workspace';
+        this.collapsed = false;
+        this.expandedCols = null;
+        this.shrinkDirection = 'left';
+        this.paneId = process.env.HERDR_PANE_ID || null;
         this.onKey = this.onKey.bind(this);
+        this.render = this.render.bind(this);
     }
 
     toggleMode() {
@@ -74,6 +88,7 @@ class Picker {
         this.stdin.resume();
         this.stdin.setEncoding('utf8');
         this.stdin.on('data', this.onKey);
+        this.stdout.on('resize', this.render);
         this.stdout.write(Picker.ANSI.hideCursor);
         this.render();
     }
@@ -82,6 +97,7 @@ class Picker {
         this.stdin.setRawMode(false);
         this.stdin.pause();
         this.stdin.off('data', this.onKey);
+        this.stdout.off('resize', this.render);
         this.stdout.write(Picker.ANSI.showCursor + Picker.ANSI.reset + '\n');
     }
 
@@ -89,6 +105,14 @@ class Picker {
         const { KEY } = Picker;
         if (key === KEY.ctrlC || key === KEY.escape) {
             this.stop();
+            return;
+        }
+        if (key === KEY.collapse) {
+            void this.toggleCollapse();
+            return;
+        }
+        if (this.collapsed) {
+            void this.toggleCollapse();
             return;
         }
         if (key === KEY.up) {
@@ -142,6 +166,60 @@ class Picker {
         this.render();
     }
 
+    resizePane(direction, amount) {
+        if (!this.paneId) {
+            return;
+        }
+        try {
+            runHerdrText(['pane', 'resize', '--pane', this.paneId, '--direction', direction, '--amount', String(amount)]);
+        } catch {}
+    }
+
+    static settle() {
+        return new Promise((resolve) => setTimeout(resolve, Picker.RESIZE_SETTLE_MS));
+    }
+
+    // collapse/expand mirrors herdr's own sidebar: the pane is resized step by
+    // step until it reaches the target width; the shrink direction is detected
+    // from the first step's effect (the sidebar may sit on either side)
+    async toggleCollapse() {
+        if (!this.paneId) {
+            return;
+        }
+        if (this.collapsed) {
+            const target = this.expandedCols || Picker.DEFAULT_COLUMNS / 2;
+            const growDirection = this.shrinkDirection === 'left' ? 'right' : 'left';
+            for (let step = 0; step < Picker.MAX_RESIZE_STEPS && (this.stdout.columns || 0) < target - 1; step += 1) {
+                this.resizePane(growDirection, Picker.RESIZE_STEP);
+                await Picker.settle();
+            }
+            this.collapsed = false;
+            this.render();
+            return;
+        }
+        this.expandedCols = this.stdout.columns || Picker.DEFAULT_COLUMNS;
+        this.collapsed = true;
+        this.render();
+        let before = this.stdout.columns || 0;
+        this.resizePane(this.shrinkDirection, Picker.RESIZE_STEP);
+        await Picker.settle();
+        if ((this.stdout.columns || 0) > before) {
+            // first step grew the pane — the border sits on the other side
+            this.shrinkDirection = this.shrinkDirection === 'left' ? 'right' : 'left';
+            this.resizePane(this.shrinkDirection, Picker.RESIZE_STEP * 2);
+            await Picker.settle();
+        }
+        for (let step = 0; step < Picker.MAX_RESIZE_STEPS && (this.stdout.columns || 0) > Picker.COLLAPSED_TARGET_COLS; step += 1) {
+            before = this.stdout.columns || 0;
+            this.resizePane(this.shrinkDirection, Picker.RESIZE_STEP);
+            await Picker.settle();
+            if ((this.stdout.columns || 0) >= before) {
+                break;
+            }
+        }
+        this.render();
+    }
+
     openSelected(mode) {
         const items = this.filtered();
         const project = items[this.selectedIndex];
@@ -163,6 +241,11 @@ class Picker {
 
     render() {
         const { ANSI } = Picker;
+        if (this.collapsed) {
+            const strip = ['', ` ${ANSI.cyan}${ANSI.bold}»${ANSI.reset}`, '', ` ${ANSI.dim}P${ANSI.reset}`, ` ${ANSI.dim}M${ANSI.reset}`, '', ` ${ANSI.dim}${this.projects.length}${ANSI.reset}`];
+            this.stdout.write(ANSI.clear + strip.join('\n'));
+            return;
+        }
         const rows = this.stdout.rows || Picker.DEFAULT_ROWS;
         const maxVisible = Math.max(1, rows - Picker.CHROME_ROWS);
         const items = this.filtered();
@@ -190,7 +273,7 @@ class Picker {
         }
         lines.push('');
         lines.push(` ${this.modeButton('workspace')} ${this.modeButton('tab')}`);
-        lines.push(` ${ANSI.dim}⏎ open · ⇥ switch · esc close${ANSI.reset}`);
+        lines.push(` ${ANSI.dim}⏎ open · ⇥ switch · < collapse · esc close${ANSI.reset}`);
         this.stdout.write(ANSI.clear + lines.join('\n'));
     }
 
