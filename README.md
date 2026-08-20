@@ -1,5 +1,7 @@
 # herdr-project-manager
 
+![demo](assets/demo.gif)
+
 Project manager plugin for [herdr](https://herdr.dev) — inspired by the VSCode
 [Project Manager](https://marketplace.visualstudio.com/items?itemName=alefragnani.project-manager)
 extension. Keep a list of your projects (auto-discovered by glob patterns or added manually) and
@@ -40,11 +42,14 @@ Bind the picker to a key in your herdr `config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+p"
+key = "prefix+shift+p"
 type = "plugin_action"
 command = "barnuri.project-manager.open-picker"
 description = "open project picker"
 ```
+
+(`prefix+p` and `prefix+g` are herdr defaults — `previous_tab` and `goto` — so pick a free
+combination like `prefix+shift+p`; check yours with `prefix+?`.)
 
 ## Configuration
 
