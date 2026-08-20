@@ -1,0 +1,32 @@
+id = "barnuri.project-manager"
+name = "Project Manager"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Discover projects via globs or manual entries and open them as herdr tabs or workspaces"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "picker"
+title = "Projects"
+command = ["node", "bin/picker.js"]
+placement = "popup"
+width = 90
+height = 30
+
+[[actions]]
+id = "open-picker"
+title = "Open project picker"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/open-picker.js"]
+
+[[actions]]
+id = "add-current"
+title = "Add current directory as project"
+contexts = ["pane", "workspace"]
+command = ["node", "bin/add-current.js"]
+
+[[actions]]
+id = "edit-config"
+title = "Edit project list"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/edit-config.js"]

@@ -1,0 +1,15 @@
+{
+    "name": "herdr-project-manager",
+    "version": "0.1.0",
+    "description": "Project manager plugin for herdr — discover projects via globs or manual entries and open them as tabs or workspaces",
+    "author": "barnuri",
+    "license": "MIT",
+    "type": "commonjs",
+    "engines": {
+        "node": ">=22.0.0"
+    },
+    "scripts": {
+        "test": "node --test \"tests/*.test.js\""
+    },
+    "keywords": ["herdr", "herdr-plugin", "project-manager", "terminal"]
+}
