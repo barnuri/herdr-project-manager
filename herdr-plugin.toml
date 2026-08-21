@@ -1,6 +1,6 @@
 id = "barnuri.project-manager"
 name = "Project Manager"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.7.0"
 description = "Discover projects via globs or manual entries and open them as herdr tabs or workspaces"
 platforms = ["linux", "macos"]

@@ -1,6 +1,6 @@
 {
     "name": "herdr-project-manager",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Project manager plugin for herdr — discover projects via globs or manual entries and open them as tabs or workspaces",
     "author": "barnuri",
     "license": "MIT",
