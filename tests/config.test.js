@@ -14,6 +14,10 @@ const {
   saveConfig,
   addProject,
   removeProject,
+  updateProject,
+  addGlob,
+  removeGlob,
+  updateGlob,
 } = require('../lib/config');
 
 describe('config', () => {
@@ -160,6 +164,129 @@ describe('config', () => {
       };
       const updated = removeProject(config, '/opt/repos/unknown');
       assert.deepEqual(updated.projects, config.projects);
+    });
+  });
+
+  describe('addGlob', () => {
+    test('appends a glob without mutating the input config', () => {
+      const config = defaultConfig();
+      const updated = addGlob(config, '~/repos/*/.git');
+      assert.deepEqual(updated.globs, ['~/repos/*/.git']);
+      assert.deepEqual(config.globs, []);
+    });
+
+    test('returns the config unchanged when the exact pattern is already present', () => {
+      const config = addGlob(defaultConfig(), '~/repos/*/.git');
+      const updated = addGlob(config, '~/repos/*/.git');
+      assert.equal(updated, config);
+    });
+
+    test('does not dedupe patterns that are merely equivalent, only exact string matches', () => {
+      const config = addGlob(defaultConfig(), '~/repos/*/.git');
+      const updated = addGlob(config, '~/repos/**/.git');
+      assert.equal(updated.globs.length, 2);
+    });
+
+    test('returns the config unchanged for a non-string pattern', () => {
+      const config = defaultConfig();
+      assert.equal(addGlob(config, null), config);
+      assert.equal(addGlob(config, 42), config);
+      assert.equal(addGlob(config, undefined), config);
+    });
+
+    test('returns the config unchanged for an empty or whitespace-only pattern', () => {
+      const config = defaultConfig();
+      assert.equal(addGlob(config, ''), config);
+      assert.equal(addGlob(config, '   '), config);
+    });
+  });
+
+  describe('removeGlob', () => {
+    test('removes the matching glob without mutating the input config', () => {
+      const config = { globs: ['~/repos/*/.git', '~/work/**/.git'], projects: [] };
+      const updated = removeGlob(config, '~/repos/*/.git');
+      assert.deepEqual(updated.globs, ['~/work/**/.git']);
+      assert.equal(config.globs.length, 2);
+    });
+
+    test('matches by exact string, not by a resolved/expanded form', () => {
+      const config = { globs: ['~/repos/*/.git'], projects: [] };
+      const updated = removeGlob(config, path.join(os.homedir(), 'repos', '*', '.git'));
+      assert.deepEqual(updated.globs, ['~/repos/*/.git']);
+    });
+
+    test('leaves the glob list intact when nothing matches', () => {
+      const config = { globs: ['~/repos/*/.git'], projects: [] };
+      const updated = removeGlob(config, '~/unknown/*/.git');
+      assert.deepEqual(updated.globs, config.globs);
+    });
+  });
+
+  describe('updateGlob', () => {
+    test('replaces the matching glob in place, preserving its position, without mutating the input', () => {
+      const config = { globs: ['~/repos/*/.git', '~/work/**/.git'], projects: [] };
+      const updated = updateGlob(config, '~/repos/*/.git', '~/renamed/*/.git');
+      assert.deepEqual(updated.globs, ['~/renamed/*/.git', '~/work/**/.git']);
+      assert.deepEqual(config.globs, ['~/repos/*/.git', '~/work/**/.git']);
+    });
+
+    test('returns the config unchanged when the new value is empty or whitespace', () => {
+      const config = { globs: ['~/repos/*/.git'], projects: [] };
+      assert.deepEqual(updateGlob(config, '~/repos/*/.git', ''), config);
+      assert.deepEqual(updateGlob(config, '~/repos/*/.git', '   '), config);
+    });
+
+    test('returns the config unchanged when the new value equals the old value', () => {
+      const config = { globs: ['~/repos/*/.git'], projects: [] };
+      assert.deepEqual(updateGlob(config, '~/repos/*/.git', '~/repos/*/.git'), config);
+    });
+
+    test('drops a pre-existing duplicate of the new value instead of creating two identical entries', () => {
+      const config = { globs: ['~/repos/*/.git', '~/work/**/.git'], projects: [] };
+      const updated = updateGlob(config, '~/repos/*/.git', '~/work/**/.git');
+      assert.deepEqual(updated.globs, ['~/work/**/.git']);
+    });
+  });
+
+  describe('updateProject', () => {
+    test('replaces the matching project in place, preserving its position and re-deriving the name, without mutating the input', () => {
+      const config = {
+        globs: [],
+        projects: [
+          { name: 'widget', path: '/opt/repos/widget' },
+          { name: 'gadget', path: '/opt/repos/gadget' },
+        ],
+      };
+      const updated = updateProject(config, '/opt/repos/widget', '/opt/repos/renamed-widget');
+      assert.deepEqual(updated.projects, [
+        { name: 'renamed-widget', path: '/opt/repos/renamed-widget' },
+        { name: 'gadget', path: '/opt/repos/gadget' },
+      ]);
+      assert.equal(config.projects[0].path, '/opt/repos/widget');
+    });
+
+    test('returns the config unchanged when the resolved new path equals the resolved old path', () => {
+      const config = { globs: [], projects: [{ name: 'widget', path: '/opt/repos/widget' }] };
+      const updated = updateProject(config, '/opt/repos/widget', '/opt/repos/widget');
+      assert.deepEqual(updated.projects, config.projects);
+    });
+
+    test('drops a pre-existing duplicate of the new path instead of creating two identical entries', () => {
+      const config = {
+        globs: [],
+        projects: [
+          { name: 'widget', path: '/opt/repos/widget' },
+          { name: 'gadget', path: '/opt/repos/gadget' },
+        ],
+      };
+      const updated = updateProject(config, '/opt/repos/widget', '/opt/repos/gadget');
+      assert.deepEqual(updated.projects, [{ name: 'gadget', path: '/opt/repos/gadget' }]);
+    });
+
+    test('expands a leading ~ in the new path the same way addProject does', () => {
+      const config = { globs: [], projects: [{ name: 'widget', path: '/opt/repos/widget' }] };
+      const updated = updateProject(config, '/opt/repos/widget', '~/repos/moved');
+      assert.deepEqual(updated.projects, [{ name: 'moved', path: path.join(os.homedir(), 'repos', 'moved') }]);
     });
   });
 });

@@ -1,22 +1,30 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { stateDir } = require('../lib/cache');
+const { listPanes, paneClose } = require('../lib/herdr');
+const {
+    withLock,
+    dockedPaneId,
+    setDockedPane,
+    clearDockedPane,
+    setSnoozed,
+    clearSnoozed,
+} = require('../lib/dock');
 
 const DEFAULT_PLUGIN_ID = 'barnuri.project-manager';
 const PICKER_ENTRYPOINT = 'picker';
-const PANE_STATE_FILE = 'sidebar-pane-id';
 
-function herdrBinaryPath() {
-    return process.env.HERDR_BIN_PATH || 'herdr';
-}
-
-function runHerdrJson(args) {
-    const child = spawnSync(herdrBinaryPath(), args, { encoding: 'utf8' });
+// The declarative `plugin pane open` call isn't a generic pane primitive, so it
+// doesn't belong in lib/herdr.js — keep its ad hoc JSON parsing local to this call.
+function openPluginPane(pluginId) {
+    const binary = process.env.HERDR_BIN_PATH || 'herdr';
+    const child = spawnSync(
+        binary,
+        ['plugin', 'pane', 'open', '--plugin', pluginId, '--entrypoint', PICKER_ENTRYPOINT],
+        { encoding: 'utf8' }
+    );
     if (child.error || child.status !== 0) {
         return null;
     }
@@ -27,58 +35,64 @@ function runHerdrJson(args) {
     }
 }
 
-function paneStatePath() {
-    return path.join(stateDir(), PANE_STATE_FILE);
-}
-
-function storedPaneId() {
-    try {
-        return fs.readFileSync(paneStatePath(), 'utf8').trim() || null;
-    } catch {
-        return null;
-    }
-}
-
-function storePaneId(paneId) {
-    try {
-        fs.mkdirSync(stateDir(), { recursive: true });
-        fs.writeFileSync(paneStatePath(), `${paneId}\n`, 'utf8');
-    } catch (error) {
-        process.stderr.write(`open-picker: failed to store pane id: ${error.message}\n`);
-    }
-}
-
-function clearPaneId() {
-    try {
-        fs.unlinkSync(paneStatePath());
-    } catch {}
-}
-
-function paneIsOpen(paneId) {
-    return runHerdrJson(['pane', 'get', paneId]) !== null;
-}
-
-// toggle: first invocation opens the sidebar, the next one closes it
+// toggle: first invocation in a tab opens the sidebar there, the next one closes it
 function togglePicker() {
-    const existing = storedPaneId();
-    if (existing && paneIsOpen(existing)) {
-        runHerdrJson(['pane', 'close', existing]);
-        clearPaneId();
-        return 0;
-    }
-    clearPaneId();
+    let lockAcquired = false;
+    let exitCode = 0;
 
-    const pluginId = process.env.HERDR_PLUGIN_ID || DEFAULT_PLUGIN_ID;
-    const opened = runHerdrJson(['plugin', 'pane', 'open', '--plugin', pluginId, '--entrypoint', PICKER_ENTRYPOINT]);
-    if (opened === null) {
-        process.stderr.write('open-picker: failed to open the picker pane\n');
+    withLock(
+        () => {
+            lockAcquired = true;
+
+            try {
+                const panes = listPanes();
+                const focused = panes.find((pane) => pane.focused);
+                if (!focused) {
+                    process.stderr.write('open-picker: no focused pane; cannot determine active tab\n');
+                    exitCode = 1;
+                    return;
+                }
+                const tabId = focused.tab_id;
+
+                const docked = dockedPaneId(tabId);
+                if (docked && panes.some((pane) => pane.pane_id === docked.paneId)) {
+                    try {
+                        paneClose(docked.paneId);
+                    } catch {
+                        // pane already gone; nothing to close
+                    }
+                    clearDockedPane(tabId);
+                    setSnoozed(tabId);
+                    return;
+                }
+
+                clearSnoozed(tabId);
+
+                const pluginId = process.env.HERDR_PLUGIN_ID || DEFAULT_PLUGIN_ID;
+                const opened = openPluginPane(pluginId);
+                if (opened === null) {
+                    process.stderr.write('open-picker: failed to open the picker pane\n');
+                    exitCode = 1;
+                    return;
+                }
+                const paneId = opened.plugin_pane?.pane?.pane_id || opened.pane?.pane_id || opened.pane_id || null;
+                if (paneId) {
+                    setDockedPane(tabId, paneId, Date.now());
+                }
+            } catch (error) {
+                process.stderr.write(`open-picker: ${error.message}\n`);
+                exitCode = 1;
+            }
+        },
+        { wait: true }
+    );
+
+    if (!lockAcquired) {
+        process.stderr.write('open-picker: could not acquire lock; a concurrent operation is in progress\n');
         return 1;
     }
-    const paneId = opened.plugin_pane?.pane?.pane_id || opened.pane?.pane_id || opened.pane_id || null;
-    if (paneId) {
-        storePaneId(paneId);
-    }
-    return 0;
+
+    return exitCode;
 }
 
 if (require.main === module) {

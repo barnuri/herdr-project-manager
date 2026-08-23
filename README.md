@@ -12,12 +12,19 @@ jump into any of them as a new herdr **tab** or **workspace** from a fuzzy-filte
 - **Glob auto-discovery** — patterns like `~/sandbox/*/.git` find every repo automatically
   (a match on a `.git` directory registers its parent as the project).
 - **Manual projects** — pin any directory with a custom name.
-- **Sidebar picker** (split pane, VSCode-style names-only list): type to filter fuzzily,
-  `↑`/`↓` to move, `Enter` opens with the selected mode button — `[ workspace ]` (default) or
-  `[ tab ]`, switched with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes, `<` collapses.
-- **Toggle** — running the `Open project picker` action again minimizes (closes) the sidebar.
-- **Collapse/expand in place** — press `<` to collapse the sidebar to a slim strip (like herdr's
-  own sidebar); any key expands it back.
+- **Always-on right dock** — the picker auto-docks itself to the right edge of every tab and
+  workspace (on creation and on focus), so it's there without running any action first. A hung
+  picker (pane still open, process no longer responding) is detected via a heartbeat and
+  automatically replaced with a fresh one.
+- **Sidebar picker** (VSCode-style names-only list): type to filter fuzzily, `↑`/`↓` to move,
+  `Enter` opens with the selected mode button — `[ workspace ]` (default) or `[ tab ]`, switched
+  with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes.
+- **Toggle** — running the `Open project picker` action closes the sidebar *in the current tab*
+  and snoozes auto-redock there until the action is run again in that tab; other tabs keep their
+  own auto-docked picker untouched.
+- **Collapse/expand in place** — click the `«`/`»` glyph in the bottom-right corner, or press `<`,
+  to collapse the sidebar to a slim strip (like herdr's own sidebar); a click on the corner, or
+  any key, expands it back.
 - **Instant load** — the last discovery result is cached in the plugin state dir, so the list
   paints immediately and globs refresh in the background.
 - **Add current directory** action — one keypress to track the project you're standing in.
@@ -40,7 +47,9 @@ herdr plugin link ./herdr-project-manager
 
 | What | How |
 |---|---|
-| Open / minimize the sidebar | Run the `Open project picker` action (toggles), or `herdr plugin pane open --plugin barnuri.project-manager --entrypoint picker` |
+| Nothing — the sidebar docks itself | Auto-appears on the right edge of every new/focused tab and workspace. No action needed. |
+| Close it in this tab / bring it back | Run the `Open project picker` action (toggles: closes + snoozes this tab, or opens + un-snoozes it), or `herdr plugin pane open --plugin barnuri.project-manager --entrypoint picker` |
+| Collapse to a strip / expand | Click the `«`/`»` corner glyph, or press `<` |
 | Add current directory | Run the `Add current directory as project` action |
 | Edit the project list | Run the `Edit project list` action (opens the config in `$EDITOR` in a new tab) |
 
