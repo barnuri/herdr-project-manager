@@ -18,6 +18,9 @@ const {
   addGlob,
   removeGlob,
   updateGlob,
+  addExclude,
+  removeExclude,
+  updateExclude,
 } = require('../lib/config');
 
 describe('config', () => {
@@ -89,6 +92,7 @@ describe('config', () => {
     test('save/load round-trips a config', () => {
       const config = {
         globs: ['/opt/repos/*/.git'],
+        excludes: ['/opt/repos/vendor'],
         projects: [{ name: 'widget', path: '/opt/repos/widget' }],
       };
       saveConfig(config);
@@ -164,6 +168,65 @@ describe('config', () => {
       };
       const updated = removeProject(config, '/opt/repos/unknown');
       assert.deepEqual(updated.projects, config.projects);
+    });
+  });
+
+  describe('excludes', () => {
+    test('defaults to an empty list', () => {
+      assert.deepEqual(defaultConfig().excludes, []);
+    });
+
+    test('loadConfig defaults excludes to an empty list when the key is missing', () => {
+      fs.writeFileSync(configPath(), JSON.stringify({ globs: ['/opt/*/.git'], projects: [] }), 'utf8');
+      assert.deepEqual(loadConfig().excludes, []);
+    });
+
+    test('loadConfig keeps string entries and drops non-string ones', () => {
+      fs.writeFileSync(
+        configPath(),
+        JSON.stringify({ globs: [], excludes: ['~/vendor', 42, null], projects: [] }),
+        'utf8'
+      );
+      assert.deepEqual(loadConfig().excludes, ['~/vendor']);
+    });
+
+    test('addExclude appends without mutating the input config', () => {
+      const config = defaultConfig();
+      const updated = addExclude(config, '~/vendor/**');
+      assert.deepEqual(updated.excludes, ['~/vendor/**']);
+      assert.deepEqual(config.excludes, []);
+    });
+
+    test('addExclude ignores duplicates and blank patterns', () => {
+      const config = addExclude(defaultConfig(), '~/vendor');
+      assert.equal(addExclude(config, '~/vendor'), config);
+      assert.equal(addExclude(config, '   '), config);
+      assert.equal(addExclude(config, null), config);
+    });
+
+    test('addExclude leaves globs and projects untouched', () => {
+      const config = addGlob(defaultConfig(), '~/repos/*/.git');
+      const updated = addExclude(config, '~/repos/vendor');
+      assert.deepEqual(updated.globs, ['~/repos/*/.git']);
+      assert.deepEqual(updated.projects, []);
+    });
+
+    test('removeExclude drops only the matching pattern', () => {
+      const config = { globs: [], excludes: ['~/a', '~/b'], projects: [] };
+      assert.deepEqual(removeExclude(config, '~/a').excludes, ['~/b']);
+      assert.deepEqual(config.excludes, ['~/a', '~/b']);
+    });
+
+    test('updateExclude replaces in place and dedupes against an existing entry', () => {
+      const config = { globs: [], excludes: ['~/a', '~/b', '~/c'], projects: [] };
+      assert.deepEqual(updateExclude(config, '~/b', '~/z').excludes, ['~/a', '~/z', '~/c']);
+      assert.deepEqual(updateExclude(config, '~/c', '~/a').excludes, ['~/b', '~/a']);
+    });
+
+    test('updateExclude returns the config unchanged for a blank or identical value', () => {
+      const config = { globs: [], excludes: ['~/a'], projects: [] };
+      assert.equal(updateExclude(config, '~/a', '  '), config);
+      assert.equal(updateExclude(config, '~/a', '~/a'), config);
     });
   });
 

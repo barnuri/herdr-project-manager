@@ -346,9 +346,10 @@ describe('Picker settings editor', () => {
   });
 
   describe('buildSettingsRows', () => {
-    test('orders globs, then manual projects, then the two add-rows, then the refresh row', () => {
+    test('orders globs, then excludes, then manual projects, then the three add-rows, then the refresh row', () => {
       const config = {
         globs: ['~/repos/*/.git'],
+        excludes: ['~/repos/vendor'],
         projects: [{ name: 'widget', path: '/opt/repos/widget' }],
       };
       const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, config);
@@ -357,8 +358,10 @@ describe('Picker settings editor', () => {
 
       assert.deepEqual(rows, [
         { kind: 'glob', value: '~/repos/*/.git' },
+        { kind: 'exclude', value: '~/repos/vendor' },
         { kind: 'project', value: { name: 'widget', path: '/opt/repos/widget' } },
         { kind: 'add-glob' },
+        { kind: 'add-exclude' },
         { kind: 'add-project' },
         { kind: 'refresh' },
       ]);
@@ -769,7 +772,37 @@ describe('Picker settings editor', () => {
       assert.equal(picker.view, 'input');
     });
 
-    test('buildSettingsRows includes a trailing refresh row after the two add-rows', () => {
+    test('confirming a new exclude persists it and refreshes the list', () => {
+      const picker = new Picker([], { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, defaultConfig());
+      picker.refreshProjects = () => {};
+      picker.view = 'settings';
+      picker.settingsIndex = picker.buildSettingsRows().findIndex((row) => row.kind === 'add-exclude');
+      picker.onKey('\r');
+      for (const character of '~/vendor') {
+        picker.onKey(character);
+      }
+
+      picker.onKey('\r');
+
+      assert.deepEqual(picker.config.excludes, ['~/vendor']);
+      assert.deepEqual(loadConfig().excludes, ['~/vendor']);
+      assert.equal(picker.view, 'settings');
+    });
+
+    test('Backspace on a selected exclude row removes it and persists', () => {
+      const config = { globs: [], excludes: ['~/vendor'], projects: [] };
+      const picker = new Picker([], { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, config);
+      picker.refreshProjects = () => {};
+      picker.view = 'settings';
+      picker.settingsIndex = 0;
+
+      picker.onKey('\x7f');
+
+      assert.deepEqual(picker.config.excludes, []);
+      assert.deepEqual(loadConfig().excludes, []);
+    });
+
+    test('buildSettingsRows includes a trailing refresh row after the add-rows', () => {
       const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
       const rows = picker.buildSettingsRows();
       assert.deepEqual(rows.at(-1), { kind: 'refresh' });
@@ -977,5 +1010,293 @@ describe('Picker settings editor', () => {
       });
       assert.equal(ran, true);
     });
+  });
+});
+
+function press(column, row) {
+  return `\x1b[<0;${column + 1};${row + 1}M`;
+}
+
+function listPicker(stdout = stdoutSpy(40, 24)) {
+  return new Picker(
+    [
+      { name: 'alpha', path: '/opt/alpha' },
+      { name: 'beta', path: '/opt/beta' },
+      { name: 'gamma', path: '/opt/gamma' },
+    ],
+    { stdin: stdinSpy(), stdout },
+    defaultConfig()
+  );
+}
+
+describe('Picker list-view mouse selection', () => {
+  test('a press on a project row selects it without opening it', () => {
+    const picker = listPicker();
+    let openCalls = 0;
+    picker.openSelected = () => {
+      openCalls += 1;
+    };
+
+    picker.onKey(press(3, Picker.LIST_HEADER_ROWS + 2));
+
+    assert.equal(picker.selectedIndex, 2);
+    assert.equal(openCalls, 0);
+  });
+
+  test('a press on the already-selected row opens it in the current mode', () => {
+    const picker = listPicker();
+    picker.selectedIndex = 1;
+    const openedModes = [];
+    picker.openSelected = (mode) => openedModes.push(mode);
+
+    picker.onKey(press(3, Picker.LIST_HEADER_ROWS + 1));
+
+    assert.deepEqual(openedModes, ['workspace']);
+  });
+
+  test('a press below the last project is ignored', () => {
+    const picker = listPicker();
+    picker.selectedIndex = 1;
+    let openCalls = 0;
+    picker.openSelected = () => {
+      openCalls += 1;
+    };
+
+    picker.onKey(press(3, Picker.LIST_HEADER_ROWS + 2 + 1));
+
+    assert.equal(picker.selectedIndex, 1);
+    assert.equal(openCalls, 0);
+  });
+
+  test('a press above the first project row (title/filter) is ignored', () => {
+    const picker = listPicker();
+    picker.selectedIndex = 1;
+
+    picker.onKey(press(3, 1));
+
+    assert.equal(picker.selectedIndex, 1);
+  });
+
+  test('a press on the scrolled list maps to the visible row, not the absolute index', () => {
+    const projects = Array.from({ length: 60 }, (unused, index) => ({
+      name: `proj-${String(index).padStart(2, '0')}`,
+      path: `/opt/proj-${index}`,
+    }));
+    const picker = new Picker(projects, { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, defaultConfig());
+    picker.selectedIndex = 40;
+    const { windowStart } = picker.listLayout();
+
+    picker.onKey(press(3, Picker.LIST_HEADER_ROWS + 2));
+
+    assert.equal(picker.selectedIndex, windowStart + 2);
+  });
+
+  test('a press on a mode button switches the open mode', () => {
+    const picker = listPicker();
+    const { modeRow } = picker.listLayout();
+
+    picker.onKey(press(16, modeRow));
+    assert.equal(picker.mode, 'tab');
+
+    picker.onKey(press(3, modeRow));
+    assert.equal(picker.mode, 'workspace');
+  });
+
+  test('modeAtColumn maps the rendered button strip and returns null outside it', () => {
+    assert.equal(Picker.modeAtColumn(0), null);
+    assert.equal(Picker.modeAtColumn(1), 'workspace');
+    assert.equal(Picker.modeAtColumn(13), 'workspace');
+    assert.equal(Picker.modeAtColumn(14), null);
+    assert.equal(Picker.modeAtColumn(15), 'tab');
+    assert.equal(Picker.modeAtColumn(21), 'tab');
+    assert.equal(Picker.modeAtColumn(22), null);
+  });
+});
+
+describe('Picker close-panel shortcut', () => {
+  test('q is a plain filter keystroke, never a close shortcut', () => {
+    const picker = listPicker();
+    let closeCalls = 0;
+    picker.closePanel = () => {
+      closeCalls += 1;
+    };
+
+    picker.onKey('q');
+    picker.onKey('q');
+
+    assert.equal(closeCalls, 0);
+    assert.equal(picker.query, 'qq');
+  });
+
+  test('ctrl+q closes the panel regardless of the filter contents', () => {
+    const picker = listPicker();
+    let closeCalls = 0;
+    picker.closePanel = () => {
+      closeCalls += 1;
+    };
+    picker.query = 'alpha';
+
+    picker.onKey('\x11');
+
+    assert.equal(closeCalls, 1);
+  });
+
+  test('ctrl+q closes the panel from the settings view too', () => {
+    const picker = listPicker();
+    let closeCalls = 0;
+    picker.closePanel = () => {
+      closeCalls += 1;
+    };
+    picker.view = 'settings';
+
+    picker.onKey('\x11');
+
+    assert.equal(closeCalls, 1);
+  });
+});
+
+describe('Picker exclude rows', () => {
+  test('an exclude row renders with a leading ! so it reads apart from a glob', () => {
+    assert.equal(Picker.settingsRowLabel({ kind: 'exclude', value: '~/vendor' }), '! ~/vendor');
+    assert.equal(Picker.settingsRowLabel({ kind: 'glob', value: '~/repos/*/.git' }), '~/repos/*/.git');
+  });
+
+  test('Enter on the "+ Add exclude" row enters input mode with inputKind exclude', () => {
+    const picker = listPicker();
+    picker.view = 'settings';
+    picker.settingsIndex = picker.buildSettingsRows().findIndex((row) => row.kind === 'add-exclude');
+
+    picker.onKey('\r');
+
+    assert.equal(picker.view, 'input');
+    assert.equal(picker.inputKind, 'exclude');
+    assert.match(picker.stdout.lastFrame(), /Add exclude pattern:/);
+  });
+
+  test('Enter on a selected exclude row opens edit mode pre-filled with its pattern', () => {
+    const config = { globs: [], excludes: ['~/vendor'], projects: [] };
+    const picker = new Picker([], { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, config);
+    picker.view = 'settings';
+    picker.settingsIndex = 0;
+
+    picker.onKey('\r');
+
+    assert.equal(picker.inputKind, 'exclude');
+    assert.equal(picker.query, '~/vendor');
+  });
+});
+
+function wheel(direction, column = 5, row = 5) {
+  const button = direction === 'up' ? 64 : 65;
+  return `\x1b[<${button};${column + 1};${row + 1}M`;
+}
+
+function longListPicker() {
+  const projects = Array.from({ length: 60 }, (unused, index) => ({
+    name: `proj-${String(index).padStart(2, '0')}`,
+    path: `/opt/proj-${index}`,
+  }));
+  return new Picker(projects, { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, defaultConfig());
+}
+
+describe('Picker.wheelDirection', () => {
+  test('maps the SGR wheel buttons to a direction', () => {
+    assert.equal(Picker.wheelDirection(64), -1);
+    assert.equal(Picker.wheelDirection(65), 1);
+  });
+
+  test('ignores the modifier bits so ctrl/shift/meta + wheel still scrolls', () => {
+    assert.equal(Picker.wheelDirection(64 + 16), -1);
+    assert.equal(Picker.wheelDirection(65 + 4), 1);
+  });
+
+  test('returns 0 for plain buttons and for the horizontal wheel', () => {
+    assert.equal(Picker.wheelDirection(0), 0);
+    assert.equal(Picker.wheelDirection(2), 0);
+    assert.equal(Picker.wheelDirection(66), 0);
+    assert.equal(Picker.wheelDirection(67), 0);
+  });
+});
+
+describe('Picker wheel scrolling', () => {
+  test('wheel down advances the selection by WHEEL_LINES', () => {
+    const picker = longListPicker();
+
+    picker.onKey(wheel('down'));
+
+    assert.equal(picker.selectedIndex, Picker.WHEEL_LINES);
+  });
+
+  test('wheel up moves back and clamps at the first row instead of wrapping', () => {
+    const picker = longListPicker();
+    picker.selectedIndex = 2;
+
+    picker.onKey(wheel('up'));
+
+    assert.equal(picker.selectedIndex, 0);
+  });
+
+  test('wheel down clamps at the last row instead of wrapping', () => {
+    const picker = longListPicker();
+    picker.selectedIndex = 58;
+
+    picker.onKey(wheel('down'));
+    picker.onKey(wheel('down'));
+
+    assert.equal(picker.selectedIndex, 59);
+  });
+
+  test('the wheel scrolls the visible window of a long list', () => {
+    const picker = longListPicker();
+    const before = picker.listLayout().windowStart;
+
+    for (let flick = 0; flick < 10; flick += 1) {
+      picker.onKey(wheel('down'));
+    }
+
+    assert.ok(picker.listLayout().windowStart > before);
+  });
+
+  test('the wheel scrolls the settings rows too', () => {
+    const config = { globs: ['~/a/*/.git', '~/b/*/.git'], excludes: [], projects: [] };
+    const picker = new Picker([], { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, config);
+    picker.view = 'settings';
+
+    picker.onKey(wheel('down'));
+
+    assert.equal(picker.settingsIndex, Picker.WHEEL_LINES);
+  });
+
+  test('a wheel event on an empty list leaves the selection at zero', () => {
+    const picker = new Picker([], { stdin: stdinSpy(), stdout: stdoutSpy(40, 24) }, defaultConfig());
+
+    picker.onKey(wheel('down'));
+
+    assert.equal(picker.selectedIndex, 0);
+  });
+
+  test('the wheel is ignored while collapsed and while editing an input', () => {
+    const picker = longListPicker();
+    picker.collapsed = true;
+    picker.onKey(wheel('down'));
+    assert.equal(picker.selectedIndex, 0);
+
+    picker.collapsed = false;
+    picker.view = 'input';
+    picker.onKey(wheel('down'));
+    assert.equal(picker.selectedIndex, 0);
+  });
+
+  test('a wheel event in the collapse-corner region scrolls instead of collapsing', () => {
+    const picker = longListPicker();
+    let toggleCollapseCalls = 0;
+    picker.toggleCollapse = () => {
+      toggleCollapseCalls += 1;
+    };
+
+    picker.onKey(wheel('down', 38, 23));
+
+    assert.equal(toggleCollapseCalls, 0);
+    assert.equal(picker.selectedIndex, Picker.WHEEL_LINES);
   });
 });

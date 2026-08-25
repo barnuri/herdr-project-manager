@@ -11,6 +11,8 @@ jump into any of them as a new herdr **tab** or **workspace** from a fuzzy-filte
 
 - **Glob auto-discovery** — patterns like `~/sandbox/*/.git` find every repo automatically
   (a match on a `.git` directory registers its parent as the project).
+- **Exclude list** — patterns that beat the globs: anything they match is dropped from
+  discovery, so one entry can hide a whole vendored/nested tree.
 - **Manual projects** — pin any directory with a custom name.
 - **Always-on right dock** — the picker auto-docks itself to the right edge of every tab and
   workspace (on creation and on focus), so it's there without running any action first. A hung
@@ -19,6 +21,11 @@ jump into any of them as a new herdr **tab** or **workspace** from a fuzzy-filte
 - **Sidebar picker** (VSCode-style names-only list): type to filter fuzzily, `↑`/`↓` to move,
   `Enter` opens with the selected mode button — `[ workspace ]` (default) or `[ tab ]`, switched
   with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes.
+- **Mouse everywhere** — click a project to select it, click it again to open it, click a mode
+  button to switch modes, click the gear to open settings, and scroll a long list with the
+  wheel (in the settings view too).
+- **Close the panel** — `Ctrl+Q` closes the sidebar *and* stops it from auto-redocking in that
+  tab, same as running the toggle action.
 - **Toggle** — running the `Open project picker` action closes the sidebar *in the current tab*
   and snoozes auto-redock there until the action is run again in that tab; other tabs keep their
   own auto-docked picker untouched.
@@ -50,6 +57,9 @@ herdr plugin link ./herdr-project-manager
 | Nothing — the sidebar docks itself | Auto-appears on the right edge of every new/focused tab and workspace. No action needed. |
 | Close it in this tab / bring it back | Run the `Open project picker` action (toggles: closes + snoozes this tab, or opens + un-snoozes it), or `herdr plugin pane open --plugin barnuri.project-manager --entrypoint picker` |
 | Collapse to a strip / expand | Click the `«`/`»` corner glyph, or press `<` |
+| Select / open a project with the mouse | Click a row to select it; click the selected row to open it |
+| Scroll a long list | Mouse wheel (3 rows per notch), or `↑`/`↓` |
+| Close the panel from inside it | `Ctrl+Q` — closes the pane and snoozes auto-redock in this tab |
 | Add current directory | Run the `Add current directory as project` action |
 | Edit the project list | Run the `Edit project list` action (opens the config in `$EDITOR` in a new tab) |
 
@@ -80,6 +90,7 @@ Full shape:
 ```json
 {
     "globs": ["~/sandbox/*/.git", "~/work/**/.git"],
+    "excludes": ["~/work/vendor", "**/node_modules/**"],
     "projects": [
         { "name": "dotfiles", "path": "~/.dotfiles" }
     ]
@@ -88,7 +99,14 @@ Full shape:
 
 - `globs` — patterns expanded on every picker launch; `~` is expanded; a `.git` match registers
   its parent directory.
+- `excludes` — patterns that override `globs`: a discovered project matching any of them is
+  dropped. An entry with no glob metacharacters is treated as a directory and hides everything
+  beneath it, so `~/work/vendor` needs no `/**` suffix. Manual `projects` entries are never
+  excluded — pinning a path is explicit.
 - `projects` — manual entries; they win over discovered entries on the same path.
+
+Both lists are editable from the picker's settings view (the gear icon, or `Ctrl+G`): `+ Add glob`,
+`+ Add exclude`, `+ Add project`. Exclude rows are shown with a leading `!`.
 
 ## Development
 

@@ -6,7 +6,34 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { discoverProjects, mergeProjects } = require('../lib/discover');
+const { discoverProjects, isExcluded, mergeProjects } = require('../lib/discover');
+
+describe('isExcluded', () => {
+  test('is false for an absent, empty, or non-array exclude list', () => {
+    assert.equal(isExcluded('/opt/repos/widget', undefined), false);
+    assert.equal(isExcluded('/opt/repos/widget', []), false);
+    assert.equal(isExcluded('/opt/repos/widget', 'not-an-array'), false);
+  });
+
+  test('matches a glob pattern against the project directory', () => {
+    assert.equal(isExcluded('/opt/repos/vendor/widget', ['/opt/repos/vendor/*']), true);
+    assert.equal(isExcluded('/opt/repos/widget', ['/opt/repos/vendor/*']), false);
+  });
+
+  test('treats a plain directory path as its whole subtree', () => {
+    assert.equal(isExcluded('/opt/repos/vendor/a/b', ['/opt/repos/vendor']), true);
+    assert.equal(isExcluded('/opt/repos/vendor', ['/opt/repos/vendor']), true);
+    assert.equal(isExcluded('/opt/repos/vendor-other', ['/opt/repos/vendor']), false);
+  });
+
+  test('expands ~ in an exclude pattern', () => {
+    assert.equal(isExcluded(path.join(os.homedir(), 'vendor', 'a'), ['~/vendor']), true);
+  });
+
+  test('skips blank and non-string entries', () => {
+    assert.equal(isExcluded('/opt/repos/widget', ['', '   ', null, 42]), false);
+  });
+});
 
 describe('discoverProjects', () => {
   let fixtureDir;
@@ -31,6 +58,29 @@ describe('discoverProjects', () => {
     assert.deepEqual(projects, [
       { name: 'git-proj', path: gitProjectDir, source: 'glob' },
     ]);
+  });
+
+  test('an exclude beats the glob that matched the project', async () => {
+    const projects = await discoverProjects([path.join(fixtureDir, '*', '.git')], [gitProjectDir]);
+    assert.deepEqual(projects, []);
+  });
+
+  test('an exclude on a parent directory drops every project beneath it', async () => {
+    const nestedGitDir = path.join(fixtureDir, 'vendor', 'nested-proj');
+    fs.mkdirSync(path.join(nestedGitDir, '.git'), { recursive: true });
+    const projects = await discoverProjects(
+      [path.join(fixtureDir, '**', '.git')],
+      [path.join(fixtureDir, 'vendor')]
+    );
+    assert.deepEqual(
+      projects.map((project) => project.path),
+      [gitProjectDir]
+    );
+  });
+
+  test('an empty exclude list leaves every match in place', async () => {
+    const projects = await discoverProjects([path.join(fixtureDir, '*', '.git')], []);
+    assert.equal(projects.length, 1);
   });
 
   test('keeps directories and drops plain-file matches', async () => {

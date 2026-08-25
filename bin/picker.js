@@ -9,14 +9,17 @@ const {
     addGlob,
     removeGlob,
     updateGlob,
+    addExclude,
+    removeExclude,
+    updateExclude,
     addProject,
     removeProject,
     updateProject,
 } = require('../lib/config');
-const { discoverProjects, mergeProjects } = require('../lib/discover');
+const { discoverProjects, isExcluded, mergeProjects } = require('../lib/discover');
 const { fuzzyFilter } = require('../lib/fuzzy');
-const { openTab, openWorkspace, runHerdrText } = require('../lib/herdr');
-const { writeHeartbeat, HEARTBEAT_INTERVAL_MS } = require('../lib/dock');
+const { listPanes, openTab, openWorkspace, paneClose, runHerdrText } = require('../lib/herdr');
+const { clearDockedPane, setSnoozed, withLock, writeHeartbeat, HEARTBEAT_INTERVAL_MS } = require('../lib/dock');
 const { logError } = require('../lib/log');
 const { expandHomePath } = require('../lib/paths');
 
@@ -44,6 +47,7 @@ class Picker {
         tab: '\t',
         ctrlT: '\x14',
         collapse: '<',
+        ctrlQ: '\x11',
         up: '\x1b[A',
         down: '\x1b[B',
         left: '\x1b[D',
@@ -67,6 +71,17 @@ class Picker {
     static COLLAPSED_STRIP_ROWS = 7;
 
     static SETTINGS_HEADER_ROWS = 2;
+
+    // title, filter, blank — the list's project rows start right after them
+    static LIST_HEADER_ROWS = 3;
+
+    // SGR wheel reports set bit 6 of the button field; bit 0 then picks the direction and
+    // the modifier bits (shift/meta/ctrl) sit above it, so mask rather than compare to 64/65.
+    static MOUSE_WHEEL_FLAG = 64;
+
+    static WHEEL_LINES = 3;
+
+    static INPUT_LABELS = { glob: 'glob', exclude: 'exclude pattern', project: 'project path' };
 
     static GEAR_GLYPH = '⚙';
 
@@ -164,6 +179,31 @@ class Picker {
         this.stdout.write(Picker.ANSI.showCursor + Picker.ANSI.reset + '\n');
     }
 
+    // Closing from inside the pane must also tell the auto-dock layer to stay away:
+    // ensure-picker re-docks a tab on focus unless that tab is snoozed, so a plain
+    // process exit would bring the sidebar straight back on the next focus event.
+    closePanel() {
+        this.stop();
+        if (!this.paneId) {
+            return;
+        }
+        try {
+            const tabId = (listPanes().find((pane) => pane.pane_id === this.paneId) || {}).tab_id;
+            if (tabId) {
+                withLock(
+                    () => {
+                        clearDockedPane(tabId);
+                        setSnoozed(tabId);
+                    },
+                    { wait: true }
+                );
+            }
+            paneClose(this.paneId);
+        } catch (error) {
+            logError('picker.closePanel', error);
+        }
+    }
+
     onKey(key) {
         this.safeCall(() => this.handleKeyEvent(key));
     }
@@ -177,6 +217,10 @@ class Picker {
         }
         if (key === KEY.ctrlC) {
             this.stop();
+            return;
+        }
+        if (key === KEY.ctrlQ) {
+            this.closePanel();
             return;
         }
         if (key === KEY.escape && this.collapsed) {
@@ -283,6 +327,13 @@ class Picker {
     }
 
     handleMouse(mouse) {
+        const wheel = Picker.wheelDirection(mouse.button);
+        if (wheel !== 0) {
+            if (mouse.isPress) {
+                this.handleWheel(wheel);
+            }
+            return;
+        }
         if (!mouse.isPress || mouse.button !== 0) {
             return;
         }
@@ -301,7 +352,98 @@ class Picker {
         }
         if (this.view === 'settings') {
             this.handleSettingsClick(mouse, paneWidth);
+            return;
         }
+        this.handleListClick(mouse);
+    }
+
+    // Returns -1 for wheel-up, 1 for wheel-down, 0 for anything else — including the
+    // horizontal wheel (buttons 66/67), which has nothing to scroll in a one-column list.
+    static wheelDirection(button) {
+        if ((button & Picker.MOUSE_WHEEL_FLAG) === 0) {
+            return 0;
+        }
+        const direction = button & 3;
+        if (direction > 1) {
+            return 0;
+        }
+        return direction === 0 ? -1 : 1;
+    }
+
+    static clampIndex(index, count) {
+        if (count === 0) {
+            return 0;
+        }
+        return Math.min(Math.max(index, 0), count - 1);
+    }
+
+    // Wheel scrolling clamps at both ends instead of wrapping like ↑/↓ do: a flick of the
+    // wheel at the end of a long list should stop there, not jump back to the other end.
+    handleWheel(direction) {
+        if (this.collapsed || this.view === 'input') {
+            return;
+        }
+        const delta = direction * Picker.WHEEL_LINES;
+        if (this.view === 'settings') {
+            this.settingsIndex = Picker.clampIndex(this.settingsIndex + delta, this.buildSettingsRows().length);
+        } else {
+            this.selectedIndex = Picker.clampIndex(this.selectedIndex + delta, this.filtered().length);
+        }
+        this.render();
+    }
+
+    // A press on a project row selects it; a press on the row that is already selected
+    // opens it, so the whole list is reachable with the mouse alone.
+    handleListClick(mouse) {
+        const layout = this.listLayout();
+        if (mouse.row === layout.modeRow) {
+            const mode = Picker.modeAtColumn(mouse.column);
+            if (mode && mode !== this.mode) {
+                this.mode = mode;
+                this.render();
+            }
+            return;
+        }
+        if (mouse.row < Picker.LIST_HEADER_ROWS) {
+            return;
+        }
+        const index = layout.windowStart + (mouse.row - Picker.LIST_HEADER_ROWS);
+        if (index >= layout.items.length) {
+            return;
+        }
+        if (index === this.selectedIndex) {
+            this.openSelected(this.mode);
+            return;
+        }
+        this.selectedIndex = index;
+        this.render();
+    }
+
+    // ' [ workspace ] [ tab ]' — the mode strip render() writes as the list's last body line
+    static modeAtColumn(column) {
+        let start = 1;
+        for (const mode of Picker.MODES) {
+            const width = `[ ${mode} ]`.length;
+            if (column >= start && column < start + width) {
+                return mode;
+            }
+            start += width + 1;
+        }
+        return null;
+    }
+
+    // Shared by render() and handleListClick() so a press lands on exactly the row the
+    // user sees: both need the same scroll window and the same mode-button row index.
+    listLayout() {
+        const rows = this.stdout.rows || Picker.DEFAULT_ROWS;
+        const maxVisible = Math.max(1, rows - Picker.CHROME_ROWS);
+        const items = this.filtered();
+        const selectedIndex = Math.min(this.selectedIndex, Math.max(0, items.length - 1));
+        const windowStart = Math.max(0, Math.min(selectedIndex - Math.floor(maxVisible / 2), items.length - maxVisible));
+        const visible = items.slice(windowStart, windowStart + maxVisible);
+        // an empty list still renders one body row: the 'no matches' placeholder
+        const bodyRows = Math.max(visible.length, 1);
+        return { items, visible, windowStart, selectedIndex, modeRow: Picker.LIST_HEADER_ROWS + bodyRows + 1 };
     }
 
     handleSettingsClick(mouse, paneWidth) {
@@ -315,7 +457,7 @@ class Picker {
         // withCornerGlyph's layout puts the glyph at column paneWidth-2 (a
         // separator space at paneWidth-3, truncated/padded text at paneWidth-4
         // and below) — clicking the glyph deletes, clicking the label text edits.
-        if (row.kind === 'glob' || row.kind === 'project') {
+        if (Picker.isEditableSettingsRow(row)) {
             if (mouse.column < paneWidth - 2) {
                 this.beginEditSelectedRow();
             } else {
@@ -324,6 +466,11 @@ class Picker {
             return;
         }
         this.activateSettingsRow();
+    }
+
+    // glob/exclude/project rows are the editable ones; the add-* and refresh rows act.
+    static isEditableSettingsRow(row) {
+        return row.kind === 'glob' || row.kind === 'exclude' || row.kind === 'project';
     }
 
     toggleSettings() {
@@ -337,10 +484,14 @@ class Picker {
         for (const glob of this.config.globs) {
             rows.push({ kind: 'glob', value: glob });
         }
+        for (const exclude of this.config.excludes ?? []) {
+            rows.push({ kind: 'exclude', value: exclude });
+        }
         for (const project of this.config.projects) {
             rows.push({ kind: 'project', value: project });
         }
         rows.push({ kind: 'add-glob' });
+        rows.push({ kind: 'add-exclude' });
         rows.push({ kind: 'add-project' });
         rows.push({ kind: 'refresh' });
         return rows;
@@ -360,7 +511,7 @@ class Picker {
         if (!row) {
             return;
         }
-        if (row.kind === 'glob' || row.kind === 'project') {
+        if (Picker.isEditableSettingsRow(row)) {
             this.beginEditSelectedRow();
             return;
         }
@@ -368,16 +519,16 @@ class Picker {
             this.refreshProjects();
             return;
         }
-        this.beginInput(row.kind === 'add-glob' ? 'glob' : 'project');
+        this.beginInput(row.kind.replace('add-', ''));
     }
 
     beginEditSelectedRow() {
         const row = this.buildSettingsRows()[this.settingsIndex];
-        if (!row || (row.kind !== 'glob' && row.kind !== 'project')) {
+        if (!row || !Picker.isEditableSettingsRow(row)) {
             return;
         }
         this.savedQuery = this.query;
-        this.query = row.kind === 'glob' ? row.value : row.value.path;
+        this.query = row.kind === 'project' ? row.value.path : row.value;
         this.inputKind = row.kind;
         this.editTarget = row;
         this.inputError = '';
@@ -392,6 +543,9 @@ class Picker {
         }
         if (row.kind === 'glob') {
             this.config = removeGlob(this.config, row.value);
+            this.persistConfig();
+        } else if (row.kind === 'exclude') {
+            this.config = removeExclude(this.config, row.value);
             this.persistConfig();
         } else if (row.kind === 'project') {
             this.config = removeProject(this.config, row.value.path);
@@ -425,24 +579,34 @@ class Picker {
         }
         if (this.editTarget) {
             const { kind, value: previousValue } = this.editTarget;
-            this.config = kind === 'glob'
-                ? updateGlob(this.config, previousValue, value)
-                : updateProject(this.config, previousValue.path, value);
+            if (kind === 'glob') {
+                this.config = updateGlob(this.config, previousValue, value);
+            } else if (kind === 'exclude') {
+                this.config = updateExclude(this.config, previousValue, value);
+            } else {
+                this.config = updateProject(this.config, previousValue.path, value);
+            }
             this.editTarget = null;
             // A collision with an earlier duplicate (updateGlob/updateProject's own
             // dedupe rule) shrinks the array before the edited row, shifting everything
             // after it left by one — re-locate the edited row by its new value instead
             // of trusting the pre-edit settingsIndex, or the selection silently lands on
             // an unrelated row.
-            const expectedValue = kind === 'glob' ? value : expandHomePath(value);
+            const expectedValue = kind === 'project' ? expandHomePath(value) : value;
             const newIndex = this.buildSettingsRows().findIndex(
-                (row) => row.kind === kind && (kind === 'glob' ? row.value === expectedValue : row.value.path === expectedValue)
+                (row) => row.kind === kind && (kind === 'project' ? row.value.path === expectedValue : row.value === expectedValue)
             );
             if (newIndex !== -1) {
                 this.settingsIndex = newIndex;
             }
         } else {
-            this.config = this.inputKind === 'glob' ? addGlob(this.config, value) : addProject(this.config, { path: value });
+            if (this.inputKind === 'glob') {
+                this.config = addGlob(this.config, value);
+            } else if (this.inputKind === 'exclude') {
+                this.config = addExclude(this.config, value);
+            } else {
+                this.config = addProject(this.config, { path: value });
+            }
             this.editTarget = null;
         }
         this.persistConfig();
@@ -485,7 +649,7 @@ class Picker {
     async refreshProjects() {
         const generation = ++this.refreshGeneration;
         try {
-            const discovered = await discoverProjects(this.config.globs);
+            const discovered = await discoverProjects(this.config.globs, this.config.excludes);
             saveProjectCache(discovered);
             if (generation !== this.refreshGeneration) {
                 return;
@@ -627,13 +791,8 @@ class Picker {
             return;
         }
         const rows = this.stdout.rows || Picker.DEFAULT_ROWS;
-        const maxVisible = Math.max(1, rows - Picker.CHROME_ROWS);
-        const items = this.filtered();
-        if (this.selectedIndex >= items.length) {
-            this.selectedIndex = Math.max(0, items.length - 1);
-        }
-        const windowStart = Math.max(0, Math.min(this.selectedIndex - Math.floor(maxVisible / 2), items.length - maxVisible));
-        const visible = items.slice(windowStart, windowStart + maxVisible);
+        const { items, visible, windowStart, selectedIndex } = this.listLayout();
+        this.selectedIndex = selectedIndex;
 
         const nameWidth = Math.max(8, paneWidth - 6);
 
@@ -656,7 +815,7 @@ class Picker {
         while (lines.length < rows - 1) {
             lines.push('');
         }
-        const hintLine = ` ⏎ open · ⇥ switch · < collapse · esc close`;
+        const hintLine = ` ⏎ open · ⇥ switch · < collapse · ⌃q close`;
         lines.push(this.withCornerGlyph(hintLine, `${ANSI.cyan}«${ANSI.reset}`, paneWidth));
         this.stdout.write(ANSI.clear + lines.join('\n'));
     }
@@ -670,7 +829,7 @@ class Picker {
             lines.push(this.renderSettingsRow(row, index === this.settingsIndex, paneWidth));
         }
         lines.push('');
-        lines.push(` ${ANSI.dim}⏎ edit/activate · ⌫ delete · ⌃r refresh · ⌃g back · esc back${ANSI.reset}`);
+        lines.push(` ${ANSI.dim}⏎ edit · ⌫ delete · ⌃r refresh · ⌃g back · ⌃q close${ANSI.reset}`);
         this.stdout.write(ANSI.clear + lines.join('\n'));
     }
 
@@ -680,21 +839,35 @@ class Picker {
         if (row.kind === 'add-glob') {
             return ` ${marker}+ Add glob${ANSI.reset}`;
         }
+        if (row.kind === 'add-exclude') {
+            return ` ${marker}+ Add exclude${ANSI.reset}`;
+        }
         if (row.kind === 'add-project') {
             return ` ${marker}+ Add project${ANSI.reset}`;
         }
         if (row.kind === 'refresh') {
             return ` ${marker}↻ Refresh list${ANSI.reset}`;
         }
-        const label = row.kind === 'glob' ? row.value : `${row.value.name} (${row.value.path})`;
+        const label = Picker.settingsRowLabel(row);
         const style = isSelected ? `${ANSI.inverse}${ANSI.bold}` : ANSI.dim;
         return this.withCornerGlyph(` ${label}`, `${ANSI.dim}${Picker.DELETE_GLYPH}${ANSI.reset}`, paneWidth, style);
+    }
+
+    static settingsRowLabel(row) {
+        if (row.kind === 'glob') {
+            return row.value;
+        }
+        if (row.kind === 'exclude') {
+            // the leading '!' is what tells an exclude apart from a glob in a narrow sidebar
+            return `! ${row.value}`;
+        }
+        return `${row.value.name} (${row.value.path})`;
     }
 
     renderInput() {
         const { ANSI } = Picker;
         const verb = this.editTarget ? 'Edit' : 'Add';
-        const label = this.inputKind === 'glob' ? `${verb} glob:` : `${verb} project path:`;
+        const label = `${verb} ${Picker.INPUT_LABELS[this.inputKind] || 'project path'}:`;
         const lines = [
             `${ANSI.bold}${ANSI.cyan} ${label}${ANSI.reset}`,
             '',
@@ -738,7 +911,9 @@ class Picker {
         process.on('unhandledRejection', Picker.handleFatalError);
 
         const config = loadConfig();
-        const cached = loadProjectCache();
+        // The cache was written before the current excludes may have been added — filtering
+        // it here makes an exclude take effect on the very next launch, not one refresh later.
+        const cached = loadProjectCache().filter((project) => !isExcluded(project.path, config.excludes));
 
         // Paint instantly from the last run's cache (possibly empty) and become
         // interactive immediately — glob discovery always refreshes in the background,
