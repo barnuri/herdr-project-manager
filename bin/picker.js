@@ -15,6 +15,9 @@ const {
     addProject,
     removeProject,
     updateProject,
+    isAutoOpenEnabled,
+    toggleAutoOpen,
+    setAutoOpen,
 } = require('../lib/config');
 const { discoverProjects, isExcluded, mergeProjects } = require('../lib/discover');
 const { fuzzyFilter } = require('../lib/fuzzy');
@@ -86,6 +89,10 @@ class Picker {
     static GEAR_GLYPH = '⚙';
 
     static DELETE_GLYPH = '✕';
+
+    static CHECKED_GLYPH = '☑';
+
+    static UNCHECKED_GLYPH = '☐';
 
     static RESIZE_STEP = 0.05;
 
@@ -474,6 +481,12 @@ class Picker {
     }
 
     toggleSettings() {
+        if (this.view !== 'settings') {
+            // The auto-open flag is also flipped by the one-shot `toggle-auto-open`
+            // action, which cannot reach this long-lived process — re-read it on entry
+            // so the checkbox never shows a state the config file disagrees with.
+            this.config = setAutoOpen(this.config, isAutoOpenEnabled(loadConfig()));
+        }
         this.view = this.view === 'settings' ? 'list' : 'settings';
         this.settingsIndex = 0;
         this.render();
@@ -494,6 +507,7 @@ class Picker {
         rows.push({ kind: 'add-exclude' });
         rows.push({ kind: 'add-project' });
         rows.push({ kind: 'refresh' });
+        rows.push({ kind: 'auto-open', value: isAutoOpenEnabled(this.config) });
         return rows;
     }
 
@@ -517,6 +531,10 @@ class Picker {
         }
         if (row.kind === 'refresh') {
             this.refreshProjects();
+            return;
+        }
+        if (row.kind === 'auto-open') {
+            this.toggleAutoOpenSetting();
             return;
         }
         this.beginInput(row.kind.replace('add-', ''));
@@ -551,6 +569,14 @@ class Picker {
             this.config = removeProject(this.config, row.value.path);
             this.persistConfig();
         }
+    }
+
+    // Persists on its own instead of via persistConfig(): the flag has no bearing on
+    // which projects are discovered, so re-running discovery here would be pure waste.
+    toggleAutoOpenSetting() {
+        this.config = toggleAutoOpen(this.config);
+        saveConfig(this.config);
+        this.render();
     }
 
     persistConfig() {
@@ -847,6 +873,10 @@ class Picker {
         }
         if (row.kind === 'refresh') {
             return ` ${marker}↻ Refresh list${ANSI.reset}`;
+        }
+        if (row.kind === 'auto-open') {
+            const box = row.value ? Picker.CHECKED_GLYPH : Picker.UNCHECKED_GLYPH;
+            return ` ${marker}${box} Auto-open sidebar${ANSI.reset}`;
         }
         const label = Picker.settingsRowLabel(row);
         const style = isSelected ? `${ANSI.inverse}${ANSI.bold}` : ANSI.dim;

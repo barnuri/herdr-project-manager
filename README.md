@@ -17,7 +17,9 @@ jump into any of them as a new herdr **tab** or **workspace** from a fuzzy-filte
 - **Always-on right dock** — the picker auto-docks itself to the right edge of every tab and
   workspace (on creation and on focus), so it's there without running any action first. A hung
   picker (pane still open, process no longer responding) is detected via a heartbeat and
-  automatically replaced with a fresh one.
+  automatically replaced with a fresh one. Auto-docking is on by default and can be turned off
+  globally — from the settings view's `Auto-open sidebar` checkbox, the
+  `Toggle auto-open project picker` action, or the `autoOpen` config key.
 - **Sidebar picker** (VSCode-style names-only list): type to filter fuzzily, `↑`/`↓` to move,
   `Enter` opens with the selected mode button — `[ workspace ]` (default) or `[ tab ]`, switched
   with `Tab`/`←`/`→` (`Ctrl+W`/`Ctrl+T` open directly), `Esc` closes.
@@ -60,6 +62,7 @@ herdr plugin link ./herdr-project-manager
 | Select / open a project with the mouse | Click a row to select it; click the selected row to open it |
 | Scroll a long list | Mouse wheel (3 rows per notch), or `↑`/`↓` |
 | Close the panel from inside it | `Ctrl+Q` — closes the pane and snoozes auto-redock in this tab |
+| Turn auto-docking on/off (all tabs) | Toggle `☑ Auto-open sidebar` in the settings view (gear or `Ctrl+G`), or run the `Toggle auto-open project picker` action |
 | Add current directory | Run the `Add current directory as project` action |
 | Edit the project list | Run the `Edit project list` action (opens the config in `$EDITOR` in a new tab) |
 
@@ -93,7 +96,8 @@ Full shape:
     "excludes": ["~/work/vendor", "**/node_modules/**"],
     "projects": [
         { "name": "dotfiles", "path": "~/.dotfiles" }
-    ]
+    ],
+    "autoOpen": true
 }
 ```
 
@@ -104,9 +108,16 @@ Full shape:
   beneath it, so `~/work/vendor` needs no `/**` suffix. Manual `projects` entries are never
   excluded — pinning a path is explicit.
 - `projects` — manual entries; they win over discovered entries on the same path.
+- `autoOpen` — whether the sidebar docks itself on tab/workspace/pane events. Defaults to `true`
+  when the key is missing, so existing configs keep the always-on dock. With `false` the sidebar
+  only appears when you ask for it (`Open project picker`, or the `picker` pane entrypoint); an
+  already-docked sidebar stays open until you close it. Unlike `Ctrl+Q`'s per-tab snooze, this is
+  a global setting.
 
 Both lists are editable from the picker's settings view (the gear icon, or `Ctrl+G`): `+ Add glob`,
-`+ Add exclude`, `+ Add project`. Exclude rows are shown with a leading `!`.
+`+ Add exclude`, `+ Add project`. Exclude rows are shown with a leading `!`. The last row in that
+view is the `Auto-open sidebar` checkbox — `Enter` or a click flips it and writes it straight to
+`projects.json`.
 
 ## Development
 

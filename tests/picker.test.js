@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { Picker } = require('../bin/picker');
-const { loadConfig, defaultConfig } = require('../lib/config');
+const { loadConfig, defaultConfig, saveConfig } = require('../lib/config');
 const { saveProjectCache } = require('../lib/cache');
 
 describe('Picker.parseMouseSequence', () => {
@@ -346,7 +346,7 @@ describe('Picker settings editor', () => {
   });
 
   describe('buildSettingsRows', () => {
-    test('orders globs, then excludes, then manual projects, then the three add-rows, then the refresh row', () => {
+    test('orders globs, then excludes, then manual projects, then the three add-rows, then refresh, then the auto-open toggle', () => {
       const config = {
         globs: ['~/repos/*/.git'],
         excludes: ['~/repos/vendor'],
@@ -364,6 +364,7 @@ describe('Picker settings editor', () => {
         { kind: 'add-exclude' },
         { kind: 'add-project' },
         { kind: 'refresh' },
+        { kind: 'auto-open', value: true },
       ]);
     });
   });
@@ -802,10 +803,11 @@ describe('Picker settings editor', () => {
       assert.deepEqual(loadConfig().excludes, []);
     });
 
-    test('buildSettingsRows includes a trailing refresh row after the add-rows', () => {
+    test('buildSettingsRows includes a refresh row after the add-rows', () => {
       const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
       const rows = picker.buildSettingsRows();
-      assert.deepEqual(rows.at(-1), { kind: 'refresh' });
+      assert.deepEqual(rows.at(-2), { kind: 'refresh' });
+      assert.equal(rows.at(-1).kind, 'auto-open');
     });
 
     test('Enter on the selected "Refresh list" row calls refreshProjects and stays in the settings view', () => {
@@ -915,6 +917,86 @@ describe('Picker settings editor', () => {
 
       assert.equal(picker.view, 'list');
       assert.deepEqual(picker.projects.map((p) => p.name), ['cached-widget']);
+    });
+  });
+
+  describe('auto-open toggle row', () => {
+    test('reflects the config flag in the row value', () => {
+      const enabled = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, { ...defaultConfig(), autoOpen: false });
+      assert.deepEqual(enabled.buildSettingsRows().at(-1), { kind: 'auto-open', value: false });
+    });
+
+    test('renders a checked box when enabled and an unchecked box when disabled', () => {
+      for (const [autoOpen, glyph] of [[true, Picker.CHECKED_GLYPH], [false, Picker.UNCHECKED_GLYPH]]) {
+        const stdout = stdoutSpy(80, 24);
+        const picker = new Picker([], { stdin: {}, stdout }, { ...defaultConfig(), autoOpen });
+        picker.view = 'settings';
+        picker.render();
+        const line = stdout.lastFrame().split('\n').find((row) => row.includes('Auto-open sidebar'));
+        assert.ok(line.includes(glyph), `expected ${glyph} in ${JSON.stringify(line)}`);
+      }
+    });
+
+    test('Enter on the row flips the flag, persists it, and stays in the settings view', () => {
+      const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
+      picker.view = 'settings';
+      picker.settingsIndex = picker.buildSettingsRows().findIndex((row) => row.kind === 'auto-open');
+
+      picker.onKey('\r');
+
+      assert.equal(picker.config.autoOpen, false);
+      assert.equal(loadConfig().autoOpen, false);
+      assert.equal(picker.view, 'settings');
+
+      picker.onKey('\r');
+
+      assert.equal(picker.config.autoOpen, true);
+      assert.equal(loadConfig().autoOpen, true);
+    });
+
+    test('toggling does not re-run project discovery (the flag has no effect on the list)', () => {
+      const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
+      picker.view = 'settings';
+      picker.settingsIndex = picker.buildSettingsRows().findIndex((row) => row.kind === 'auto-open');
+      let refreshCalls = 0;
+      picker.refreshProjects = () => {
+        refreshCalls += 1;
+      };
+
+      picker.onKey('\r');
+
+      assert.equal(refreshCalls, 0);
+    });
+
+    test('a mouse click anywhere on the row flips the flag', () => {
+      const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
+      picker.view = 'settings';
+      const rowIndex = picker.buildSettingsRows().findIndex((row) => row.kind === 'auto-open');
+      const clickRow = Picker.SETTINGS_HEADER_ROWS + rowIndex + 1;
+
+      picker.onKey(`\x1b[<0;5;${clickRow}M`);
+
+      assert.equal(picker.config.autoOpen, false);
+      assert.equal(loadConfig().autoOpen, false);
+    });
+
+    test('Backspace on the row does not delete anything', () => {
+      const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
+      picker.view = 'settings';
+      picker.settingsIndex = picker.buildSettingsRows().findIndex((row) => row.kind === 'auto-open');
+
+      picker.onKey('\x7f');
+
+      assert.deepEqual(picker.buildSettingsRows().at(-1), { kind: 'auto-open', value: true });
+    });
+
+    test('entering the settings view re-reads the flag from disk (the action can flip it behind us)', () => {
+      const picker = new Picker([], { stdin: {}, stdout: stdoutSpy(80, 24) }, defaultConfig());
+      saveConfig({ ...defaultConfig(), autoOpen: false });
+
+      picker.toggleSettings();
+
+      assert.deepEqual(picker.buildSettingsRows().at(-1), { kind: 'auto-open', value: false });
     });
   });
 

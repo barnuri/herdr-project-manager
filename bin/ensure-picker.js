@@ -16,6 +16,7 @@ const {
     DOCK_GRACE_PERIOD_MS,
 } = require('../lib/dock');
 const { listPanes, paneLayout, paneSplit, paneRun, paneRename, paneClose } = require('../lib/herdr');
+const { loadConfig, isAutoOpenEnabled } = require('../lib/config');
 const { logError } = require('../lib/log');
 
 const PICKER_SCRIPT_PATH = path.join(__dirname, 'picker.js');
@@ -64,6 +65,12 @@ function closeStrayPickerPanes(panes, tabId, keepPaneId) {
 }
 
 function runEnsure() {
+    // Read fresh on every event: the setting is flipped by a one-shot action or by an
+    // already-running picker pane, neither of which can reach into this process.
+    if (!isAutoOpenEnabled(loadConfig())) {
+        return;
+    }
+
     const now = Date.now();
     const panes = listPanes();
     const focused = panes.find((pane) => pane.focused);

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { ensurePicker } = require('../bin/ensure-picker');
+const { saveConfig, defaultConfig, setAutoOpen } = require('../lib/config');
 const {
   dockedPaneId,
   setDockedPane,
@@ -57,8 +58,8 @@ function shQuote(value) {
 // Mirrors bin/ensure-picker.js's buildPickerCommand: it forwards the state-dir
 // env var it itself received (the test's HERDR_PLUGIN_STATE_DIR override) plus
 // the new pane's id, since a bare `pane run` shell gets neither otherwise.
-function expectedPickerRunCommand(newPaneId, stateDir) {
-  return `HERDR_PLUGIN_STATE_DIR=${shQuote(stateDir)} HERDR_PANE_ID=${shQuote(newPaneId)} node ${shQuote(PICKER_SCRIPT_PATH)}`;
+function expectedPickerRunCommand(newPaneId, stateDir, configDirPath) {
+  return `HERDR_PLUGIN_CONFIG_DIR=${shQuote(configDirPath)} HERDR_PLUGIN_STATE_DIR=${shQuote(stateDir)} HERDR_PANE_ID=${shQuote(newPaneId)} node ${shQuote(PICKER_SCRIPT_PATH)}`;
 }
 
 function readRecordedCalls(callsFilePath) {
@@ -79,14 +80,17 @@ function setStubJson(varName, result) {
 describe('ensure-picker', () => {
   let binDir;
   let stateDirPath;
+  let configDirPath;
   let callsFilePath;
   let previousBinPathEnv;
   let previousStateDirEnv;
+  let previousConfigDirEnv;
   let previousExitCode;
 
   beforeEach(() => {
     previousBinPathEnv = process.env.HERDR_BIN_PATH;
     previousStateDirEnv = process.env.HERDR_PLUGIN_STATE_DIR;
+    previousConfigDirEnv = process.env.HERDR_PLUGIN_CONFIG_DIR;
     previousExitCode = process.exitCode;
     process.exitCode = undefined;
 
@@ -99,6 +103,12 @@ describe('ensure-picker', () => {
 
     stateDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-picker-state-'));
     process.env.HERDR_PLUGIN_STATE_DIR = stateDirPath;
+
+    // ensure-picker reads the auto-open flag from the config file, so point it at an
+    // empty temp dir: without this the suite would silently follow the developer's own
+    // ~/.config config and stop docking the moment they turned auto-open off.
+    configDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-picker-config-'));
+    process.env.HERDR_PLUGIN_CONFIG_DIR = configDirPath;
 
     setStubJson('HERDR_STUB_SPLIT_JSON', { pane: { pane_id: 'pane-new' } });
     setStubJson('HERDR_STUB_RUN_JSON', {});
@@ -117,12 +127,66 @@ describe('ensure-picker', () => {
     } else {
       process.env.HERDR_PLUGIN_STATE_DIR = previousStateDirEnv;
     }
+    if (previousConfigDirEnv === undefined) {
+      delete process.env.HERDR_PLUGIN_CONFIG_DIR;
+    } else {
+      process.env.HERDR_PLUGIN_CONFIG_DIR = previousConfigDirEnv;
+    }
     for (const name of STUB_ENV_VARS) {
       delete process.env[name];
     }
     process.exitCode = previousExitCode;
     fs.rmSync(binDir, { recursive: true, force: true });
     fs.rmSync(stateDirPath, { recursive: true, force: true });
+    fs.rmSync(configDirPath, { recursive: true, force: true });
+  });
+
+  describe('auto-open setting', () => {
+    const FOCUSED_TAB_LIST = {
+      panes: [{ pane_id: 'pane-focused', tab_id: TAB_ID, focused: true }],
+    };
+    const WIDE_LAYOUT = {
+      layout: {
+        area: { width: 200 },
+        zoomed: false,
+        panes: [{ pane_id: 'pane-focused', rect: { x: 0, width: 200 } }],
+      },
+    };
+
+    test('autoOpen: false docks nothing and makes no herdr calls at all', () => {
+      saveConfig(setAutoOpen(defaultConfig(), false));
+      setStubJson('HERDR_STUB_LIST_JSON', FOCUSED_TAB_LIST);
+      setStubJson('HERDR_STUB_LAYOUT_JSON', WIDE_LAYOUT);
+
+      ensurePicker();
+
+      assert.deepEqual(readRecordedCalls(callsFilePath), []);
+      assert.equal(dockedPaneId(TAB_ID), undefined);
+    });
+
+    test('autoOpen: true docks as usual', () => {
+      saveConfig(setAutoOpen(defaultConfig(), true));
+      setStubJson('HERDR_STUB_LIST_JSON', FOCUSED_TAB_LIST);
+      setStubJson('HERDR_STUB_LAYOUT_JSON', WIDE_LAYOUT);
+
+      ensurePicker();
+
+      assert.equal(dockedPaneId(TAB_ID).paneId, 'pane-new');
+    });
+
+    test('a config file with no autoOpen key still docks (the flag is opt-out)', () => {
+      fs.writeFileSync(
+        path.join(configDirPath, 'projects.json'),
+        JSON.stringify({ globs: [], projects: [] }),
+        'utf8'
+      );
+      setStubJson('HERDR_STUB_LIST_JSON', FOCUSED_TAB_LIST);
+      setStubJson('HERDR_STUB_LAYOUT_JSON', WIDE_LAYOUT);
+
+      ensurePicker();
+
+      assert.equal(dockedPaneId(TAB_ID).paneId, 'pane-new');
+    });
   });
 
   test('fresh tab with no docked picker docks: pane list -> layout -> split -> run -> rename', () => {
@@ -143,7 +207,7 @@ describe('ensure-picker', () => {
       ['pane', 'list'],
       ['pane', 'layout', '--pane', 'pane-focused'],
       ['pane', 'split', 'pane-focused', '--direction', 'right', '--ratio', '0.75', '--no-focus'],
-      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath)],
+      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath, configDirPath)],
       ['pane', 'rename', 'pane-new', 'Projects'],
     ]);
 
@@ -215,7 +279,7 @@ describe('ensure-picker', () => {
       ['pane', 'list'],
       ['pane', 'layout', '--pane', 'pane-focused'],
       ['pane', 'split', 'pane-focused', '--direction', 'right', '--ratio', '0.75', '--no-focus'],
-      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath)],
+      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath, configDirPath)],
       ['pane', 'rename', 'pane-new', 'Projects'],
     ]);
     assert.equal(dockedPaneId(TAB_ID).paneId, 'pane-new');
@@ -245,7 +309,7 @@ describe('ensure-picker', () => {
       ['pane', 'close', 'pane-docked'],
       ['pane', 'layout', '--pane', 'pane-focused'],
       ['pane', 'split', 'pane-focused', '--direction', 'right', '--ratio', '0.75', '--no-focus'],
-      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath)],
+      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath, configDirPath)],
       ['pane', 'rename', 'pane-new', 'Projects'],
     ]);
     assert.equal(dockedPaneId(TAB_ID).paneId, 'pane-new');
@@ -339,7 +403,7 @@ describe('ensure-picker', () => {
       ['pane', 'close', 'pane-stray'],
       ['pane', 'layout', '--pane', 'pane-focused'],
       ['pane', 'split', 'pane-focused', '--direction', 'right', '--ratio', '0.75', '--no-focus'],
-      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath)],
+      ['pane', 'run', 'pane-new', expectedPickerRunCommand('pane-new', stateDirPath, configDirPath)],
       ['pane', 'rename', 'pane-new', 'Projects'],
     ]);
     assert.equal(dockedPaneId(TAB_ID).paneId, 'pane-new');

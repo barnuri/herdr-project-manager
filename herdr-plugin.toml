@@ -24,6 +24,12 @@ contexts = ["pane", "workspace"]
 command = ["node", "bin/add-current.js"]
 
 [[actions]]
+id = "toggle-auto-open"
+title = "Toggle auto-open project picker"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/toggle-auto-open.js"]
+
+[[actions]]
 id = "edit-config"
 title = "Edit project list"
 contexts = ["workspace", "pane"]

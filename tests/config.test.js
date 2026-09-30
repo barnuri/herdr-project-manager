@@ -21,6 +21,9 @@ const {
   addExclude,
   removeExclude,
   updateExclude,
+  isAutoOpenEnabled,
+  setAutoOpen,
+  toggleAutoOpen,
 } = require('../lib/config');
 
 describe('config', () => {
@@ -49,6 +52,47 @@ describe('config', () => {
 
     test('configPath is projects.json inside the config dir', () => {
       assert.equal(configPath(), path.join(tempDir, 'projects.json'));
+    });
+  });
+
+  describe('autoOpen', () => {
+    test('defaultConfig enables auto-open', () => {
+      assert.equal(defaultConfig().autoOpen, true);
+    });
+
+    test('a config file without the key loads as enabled (opt-out, not opt-in)', () => {
+      fs.writeFileSync(configPath(), JSON.stringify({ globs: [], projects: [] }), 'utf8');
+      assert.equal(loadConfig().autoOpen, true);
+    });
+
+    test('a non-boolean autoOpen value falls back to enabled', () => {
+      fs.writeFileSync(configPath(), JSON.stringify({ globs: [], projects: [], autoOpen: 'no' }), 'utf8');
+      assert.equal(loadConfig().autoOpen, true);
+    });
+
+    test('autoOpen: false survives a save/load round-trip', () => {
+      saveConfig(setAutoOpen(defaultConfig(), false));
+      assert.equal(loadConfig().autoOpen, false);
+      assert.equal(isAutoOpenEnabled(loadConfig()), false);
+    });
+
+    test('isAutoOpenEnabled treats a missing key and a missing config as enabled', () => {
+      assert.equal(isAutoOpenEnabled({}), true);
+      assert.equal(isAutoOpenEnabled(undefined), true);
+    });
+
+    test('setAutoOpen leaves the rest of the config untouched', () => {
+      const config = addGlob(defaultConfig(), '~/repos/*/.git');
+      const updated = setAutoOpen(config, false);
+      assert.deepEqual(updated.globs, ['~/repos/*/.git']);
+      assert.equal(updated.autoOpen, false);
+      assert.equal(config.autoOpen, true);
+    });
+
+    test('toggleAutoOpen flips both ways, and treats a missing key as enabled', () => {
+      assert.equal(toggleAutoOpen(defaultConfig()).autoOpen, false);
+      assert.equal(toggleAutoOpen(setAutoOpen(defaultConfig(), false)).autoOpen, true);
+      assert.equal(toggleAutoOpen({ globs: [], projects: [] }).autoOpen, false);
     });
   });
 
@@ -94,6 +138,7 @@ describe('config', () => {
         globs: ['/opt/repos/*/.git'],
         excludes: ['/opt/repos/vendor'],
         projects: [{ name: 'widget', path: '/opt/repos/widget' }],
+        autoOpen: false,
       };
       saveConfig(config);
       assert.deepEqual(loadConfig(), config);
